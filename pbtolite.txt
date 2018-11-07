@@ -1,0 +1,1 @@
+toco --output_file=trash_mobilenet_50.tflite --graph_def_file=trash_mobilenet_50.pb --output_format=TFLITE --inference_input_type=FLOAT --inference_type=FLOAT --input_shapes=1,224,224,3 --input_arrays=import/input --output_arrays=final_result
