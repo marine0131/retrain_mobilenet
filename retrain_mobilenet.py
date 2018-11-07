@@ -1,3 +1,4 @@
+#! /usr/bin/env python
 # -*- coding: utf-8 -*-
 import glob
 import json
@@ -10,15 +11,15 @@ from tensorflow.python.platform import gfile
 from tensorflow.python.framework import graph_util
 
 # 数据参数
-MODEL_DIR = '/home/xll/train_trash/mobilenet/tmp/model/'  # inception-v3模型的文件夹
-CACHE_DIR = '/home/xll/train_trash/mobilenet/tmp/bottleneck'  # 图像的特征向量保存地址
+MODEL_DIR = 'tmp/model/'  # inception-v3模型的文件夹
+CACHE_DIR = 'tmp/bottleneck'  # 图像的特征向量保存地址
+CHECKPOINT_NAME = 'tmp/model/checkpoint/retrain'
 out_dir = 'tmp/'
-INPUT_DATA = '/home/xll/train_trash/training/'  # 图片数据文件夹
-CHECKPOINT_NAME = '/home/xll/train_trash/mobilenet/tmp/model/checkpoint/retrain'
-tfhub_module = '/home/xll/train_trash/mobilenet/mobilenet_v1_1.0_224/mobilenet_v1_1.0_224_frozen.pb'
+INPUT_DATA = 'input_data/'  # 图片数据文件夹
+frozen_graph = 'mobilenet_v1_1.0_224/mobilenet_v1_1.0_224_frozen.pb'
 
 # inception-v3模型参数
-BOTTLENECK_TENSOR_NAME = 'MobilenetV1/Logits/AvgPool_1a/AvgPool:0'  # inception-v3模型中代表瓶颈层结果的张量名称
+BOTTLENECK_TENSOR_NAME = 'MobilenetV1/Logits/AvgPool_1a/AvgPool:0'  # 模型中代表瓶颈层结果的张量名称
 JPEG_DATA_TENSOR_NAME = 'input:0'  # 图像输入张量对应的名称
 final_tensor_name = 'final_result'
 
@@ -31,8 +32,8 @@ STEPS = 50
 BATCH = 64
 NUM_CLASSES = 9
 CHECKPOINT_EVERY = 10
-validation_percentage = 10
-test_percentage = 10
+VALIDATION_PERCENTAGE = 10
+TEST_PERCENTAGE = 10
 
 def create_all_bottlenecks(sess, resize_data_tensor, bottleneck_tensor, jpeg_data_tensor, decoded_image_tensor):
     sub_dirs = [x[0] for x in os.walk(INPUT_DATA)]  # 获取所有子目录
@@ -77,10 +78,10 @@ def create_all_bottlenecks(sess, resize_data_tensor, bottleneck_tensor, jpeg_dat
             base_name = os.path.basename(file_name)  # 获取该图片的名称
             bottleneck_path = get_or_create_bottleneck(sess, label_name, base_name, resize_data_tensor, bottleneck_tensor, jpeg_data_tensor, decoded_image_tensor)
             chance = np.random.randint(100)  # 随机产生100个数代表百分比
-            if chance < validation_percentage:
+            if chance < VALIDATION_PERCENTAGE:
                 valid_images.append(bottleneck_path)
                 valid_labels.append(label_index)
-            elif chance < (validation_percentage + test_percentage):
+            elif chance < (VALIDATION_PERCENTAGE + TEST_PERCENTAGE):
                 test_images.append(bottleneck_path)
                 test_labels.append(label_index)
             else:
@@ -111,7 +112,7 @@ def get_or_create_bottleneck(sess, label_name, base_name, resize_data_tensor, bo
         # Then run it through the recognition network.
         bottleneck_values = sess.run(bottleneck_tensor, {resize_data_tensor: resize_data})
         bottleneck_values = np.squeeze(bottleneck_values)
-        
+
 
         # bottleneck_values = sess.run(bottleneck_tensor, {jpeg_data_tensor: image_data})
         # bottleneck_values = np.squeeze(bottleneck_values) # 通过inception-v3计算特征向量
@@ -188,11 +189,13 @@ def add_final_retrain_ops(NUM_CLASSES, final_tensor_name, bottleneck_tensor, is_
     print('bottleneck_tensor_size', bottleneck_tensor_size)
     #assert batch_size is None, 'We want to work with arbitrary batch size.'
     with tf.name_scope('input'):
+        # creat input tensor for final layer
         bottleneck_input = tf.placeholder_with_default(
             bottleneck_tensor,
             shape=[None, bottleneck_tensor_size],
             name='BottleneckInputPlaceholder')
 
+        # create bias tensor
         ground_truth_input = tf.placeholder(
             tf.int64, [None], name='GroundTruthInput')
 
@@ -245,7 +248,7 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
 
 def build_eval_session(module_spec):
     eval_graph, bottleneck_tensor, resize_data_tensor = (
-        create_module_graph(tfhub_module))
+        create_module_graph(frozen_graph))
 
     eval_sess = tf.Session(graph=eval_graph)
     with eval_graph.as_default():
@@ -257,8 +260,8 @@ def build_eval_session(module_spec):
     return eval_sess, resize_data_tensor, bottleneck_input, ground_truth_input, evaluation_step, prediction
 
 
-def save_graph_to_file(graph_file_name, tfhub_module):
-  sess, _, _, _, _, _ = build_eval_session(tfhub_module)
+def save_graph_to_file(graph_file_name, frozen_graph):
+  sess, _, _, _, _, _ = build_eval_session(frozen_graph)
   graph = sess.graph
 
   output_graph_def = tf.graph_util.convert_variables_to_constants(sess, graph.as_graph_def(), [final_tensor_name])
@@ -266,19 +269,20 @@ def save_graph_to_file(graph_file_name, tfhub_module):
   with tf.gfile.FastGFile(graph_file_name, 'wb') as f:
     f.write(output_graph_def.SerializeToString())
 
-def create_module_graph(tfhub_module):
+def create_module_graph(frozen_graph):
     with tf.Graph().as_default() as pre_graph:
-        # 读取训练好的mobilenet_v1模型
-        with gfile.FastGFile(tfhub_module, 'rb') as f:
+        # load pre-trained model
+        with gfile.FastGFile(frozen_graph, 'rb') as f:
             graph_def = tf.GraphDef()
             graph_def.ParseFromString(f.read())
-            # 加载inception-v3模型，并返回数据输入张量和瓶颈层输出张量
+            # get input tensor and bottleneck tensor
             bottleneck_tensor, jpeg_data_tensor = tf.import_graph_def(graph_def, return_elements=[BOTTLENECK_TENSOR_NAME, JPEG_DATA_TENSOR_NAME])
+            # reshape bottleneck tensor
             bottleneck_tensor = tf.reshape(bottleneck_tensor, [-1, 1024])
     return pre_graph, bottleneck_tensor, jpeg_data_tensor
 
 def add_jpeg_decoding():
-    input_height = 224 
+    input_height = 224
     input_width = 224
     input_depth = 3
     jpeg_data = tf.placeholder(tf.string, name='DecodeJPGInput')
@@ -295,7 +299,8 @@ def add_jpeg_decoding():
 
 
 def main(_):
-    pre_graph, bottleneck_tensor, resize_data_tensor = create_module_graph(tfhub_module)
+    # get graph bottleneck_tensor and data tensor from pretrained graph
+    pre_graph, bottleneck_tensor, resize_data_tensor = create_module_graph(frozen_graph)
 
     with pre_graph.as_default():
         train_step, cross_entropy, bottleneck_input, ground_truth_input, final_tensor = add_final_retrain_ops(
@@ -303,11 +308,13 @@ def main(_):
 
     # 训练过程
     with tf.Session(graph=pre_graph) as sess:
+        # initialize
         init = tf.global_variables_initializer()
         sess.run(init)
 
+        # get jpg input
         jpeg_data_tensor, decoded_image_tensor = add_jpeg_decoding()
-        
+
         print('start prepare image data........................')
         image_list, label_keys = create_all_bottlenecks(sess, resize_data_tensor, bottleneck_tensor, jpeg_data_tensor, decoded_image_tensor)
         print(len(image_list['training'][0]))
@@ -354,7 +361,7 @@ def main(_):
                 path = train_saver.save(sess, CHECKPOINT_NAME)
                 print('Saved model checkpoint to {}\n'.format(path))
                 RETRAIN_MODEL = MODEL_DIR + 'trash_mobilenet_' + str(i+1) + '.pb'
-                save_graph_to_file(RETRAIN_MODEL, tfhub_module)
+                save_graph_to_file(RETRAIN_MODEL, frozen_graph)
 
             # 最后在测试集上测试正确率
             if i % CHECKPOINT_EVERY == 0 or i + 1 == STEPS:
