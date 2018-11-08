@@ -6,7 +6,6 @@ import os.path
 import random
 import numpy as np
 import tensorflow as tf
-import tensorflow_hub as hub
 from tensorflow.python.platform import gfile
 from tensorflow.python.framework import graph_util
 
